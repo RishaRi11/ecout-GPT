@@ -16,6 +16,7 @@ class AudioTranscriber:
                  context_depth=3, pause_threshold=3.0, min_user_speech=1.5,
                  logger=None, language="ru"):
         self.context_depth = context_depth
+        self.context_offset = 0  # верхняя граница диапазона контекста
         self.pause_threshold = pause_threshold
         self.min_user_speech = min_user_speech
         self.logger = logger
@@ -55,7 +56,10 @@ class AudioTranscriber:
         self.language = lang_code
 
     def get_current_prompt(self):
-        return [t[0].strip() for t in self.transcript_data['Speaker'][:self.context_depth]]
+        speaker_lines = [t[0].strip() for t in self.transcript_data['Speaker']]
+        start = self.context_offset
+        end = start + self.context_depth
+        return speaker_lines[start:end]
 
     def transcribe_audio_queue(self, speaker_queue, mic_queue):
         import queue
