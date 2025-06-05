@@ -250,8 +250,9 @@ def create_ui(root, transcriber, gpt_mgr, mic_rec, spk_rec, config):
     def update_slider_limits():
         spk_total = len(transcriber.transcript_data["Speaker"])
         max_val = max(spk_total - 1, 0)
+        slider_max = max(1, max_val)
         if hasattr(range_slider, "configure"):
-            range_slider.configure(to=max_val, number_of_steps=max(1, max_val))
+            range_slider.configure(to=slider_max, number_of_steps=slider_max)
         if transcriber.context_start > max_val:
             transcriber.context_start = max_val
         if transcriber.context_end > max_val:
