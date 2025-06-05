@@ -14,6 +14,7 @@ import tkinter as tk
 
 import AudioRecorder
 from AudioTranscriber import AudioTranscriber
+from vertical_range_slider import VerticalRangeSlider
 from gpt_manager import GPTManager
 from log_manager import LogManager
 import TranscriberModels
@@ -100,21 +101,15 @@ def create_ui(root, transcriber, gpt_mgr, mic_rec, spk_rec, config):
     gpt_tb.grid(row=0, column=2, sticky="nsew", padx=(5, 10), pady=10)
 
     # --- Vertical range slider for context selection ---
-    try:
-        range_slider = ctk.CTkRangeSlider(
-            root,
-            from_=0,
-            to=1,
-            orientation="vertical",
-            number_of_steps=1,
-            command=lambda v: update_context_range(int(v[0]), int(v[1])),
-            button_corner_radius=0
-        )
-    except AttributeError:
-        range_slider = ctk.CTkSlider(root, orientation="vertical")
+    range_slider = VerticalRangeSlider(
+        root,
+        from_=0,
+        to=1,
+        number_of_steps=1,
+        command=lambda v: update_context_range(int(v[0]), int(v[1]))
+    )
     range_slider.grid(row=0, column=1, sticky="ns", pady=10)
-    if hasattr(range_slider, "set"):
-        range_slider.set(transcriber.context_start, transcriber.context_end)
+    range_slider.set(transcriber.context_start, transcriber.context_end)
 
     # --- делаем оба textbox-а доступными для выделения/копирования ---
     for tb in (transcript_tb, gpt_tb):
