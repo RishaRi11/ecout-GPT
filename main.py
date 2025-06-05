@@ -104,9 +104,11 @@ def create_ui(root, transcriber, gpt_mgr, mic_rec, spk_rec, config):
         range_slider = ctk.CTkRangeSlider(
             root,
             from_=0,
-            to=9,
+            to=1,
             orientation="vertical",
-            command=lambda v: update_context_range(int(v[0]), int(v[1]))
+            number_of_steps=1,
+            command=lambda v: update_context_range(int(v[0]), int(v[1])),
+            button_corner_radius=0
         )
     except AttributeError:
         range_slider = ctk.CTkSlider(root, orientation="vertical")
@@ -223,17 +225,41 @@ def create_ui(root, transcriber, gpt_mgr, mic_rec, spk_rec, config):
 
     # Функция-обработчик изменения ползунка
     def update_context_range(start: int, end: int):
+        if end < start:
+            start, end = end, start
+        spk_total = len(transcriber.transcript_data["Speaker"])
+        max_val = max(spk_total - 1, 0)
+        start = max(0, min(start, max_val))
+        end = max(0, min(end, max_val))
+        if end < start:
+            end = start
         transcriber.context_start = start
         transcriber.context_end = end
-        current_list = transcriber.get_current_prompt()
 
+
+        current_list = transcriber.get_current_prompt()
         preview_text = "".join(current_list)
 
-        # Обновляем prompt_preview
+        write_transcript(transcript_tb, transcriber.get_transcript(), start, end)
+
         prompt_preview.configure(state="normal")
         prompt_preview.delete("0.0", "end")
         prompt_preview.insert("0.0", preview_text)
         prompt_preview.configure(state="disabled")
+
+    def update_slider_limits():
+        spk_total = len(transcriber.transcript_data["Speaker"])
+        max_val = max(spk_total - 1, 0)
+        if hasattr(range_slider, "configure"):
+            range_slider.configure(to=max_val, number_of_steps=max(1, max_val))
+        if transcriber.context_start > max_val:
+            transcriber.context_start = max_val
+        if transcriber.context_end > max_val:
+            transcriber.context_end = max_val
+        if transcriber.context_end < transcriber.context_start:
+            transcriber.context_start = transcriber.context_end
+        if hasattr(range_slider, "set"):
+            range_slider.set(transcriber.context_start, transcriber.context_end)
 
     # Инициализируем превью при старте
     update_context_range(transcriber.context_start, transcriber.context_end)
@@ -242,8 +268,7 @@ def create_ui(root, transcriber, gpt_mgr, mic_rec, spk_rec, config):
     def _poll_events():
         # новый текст от транскрипции
         if transcriber.transcript_changed_event.is_set():
-            write_transcript(transcript_tb, transcriber.get_transcript(),
-                            transcriber.context_start, transcriber.context_end)
+            update_slider_limits()
             update_context_range(transcriber.context_start, transcriber.context_end)
             transcriber.transcript_changed_event.clear()
 
