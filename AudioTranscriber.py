@@ -15,7 +15,8 @@ class AudioTranscriber:
     def __init__(self, mic_source, speaker_source, model,
                  context_depth=3, pause_threshold=3.0, min_user_speech=1.5,
                  logger=None, language="ru"):
-        self.context_depth = context_depth
+        self.context_start = 0
+        self.context_end = context_depth - 1
         self.pause_threshold = pause_threshold
         self.min_user_speech = min_user_speech
         self.logger = logger
@@ -55,7 +56,14 @@ class AudioTranscriber:
         self.language = lang_code
 
     def get_current_prompt(self):
-        return [t[0].strip() for t in self.transcript_data['Speaker'][:self.context_depth]]
+        spk = self.transcript_data['Speaker']
+        if not spk:
+            return []
+        start = min(self.context_start, len(spk) - 1)
+        end = min(self.context_end, len(spk) - 1)
+        if end < start:
+            end = start
+        return [t[0].strip() for t in spk[start:end + 1]]
 
     def transcribe_audio_queue(self, speaker_queue, mic_queue):
         import queue
