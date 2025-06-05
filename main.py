@@ -429,7 +429,7 @@ def main():
     spk_rec = AudioRecorder.DefaultSpeakerRecorder()
     spk_rec.record_into_queue(speaker_q)
 
-    model = TranscriberModels.get_model(use_api=True)
+    model = TranscriberModels.get_model()
 
     log_mgr = LogManager(log_dir=os.path.join(os.path.dirname(__file__), "log"))
 
