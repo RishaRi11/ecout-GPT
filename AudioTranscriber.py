@@ -79,7 +79,6 @@ class AudioTranscriber:
         pending_tasks = set()
 
         while True:
-            now = datetime.utcnow()
 
             while True:
                 try:
@@ -104,6 +103,8 @@ class AudioTranscriber:
                         ))
                 except queue.Empty:
                     break
+
+            now = datetime.utcnow()
 
             for who in ("You", "Speaker"):
                 src = self.audio_sources[who]
@@ -153,7 +154,8 @@ class AudioTranscriber:
             source_info["new_phrase"] = False
 
         source_info["phrase_buffer"] += data
-        source_info["last_sample"] = bytes(source_info["phrase_buffer"])
+        # keep last_sample for backward compatibility but avoid expensive copy
+        source_info["last_sample"] = source_info["phrase_buffer"]
         source_info["last_spoken"] = time_spoken
 
         return completed
