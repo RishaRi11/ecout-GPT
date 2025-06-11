@@ -13,12 +13,10 @@ MAX_PHRASES = 10
 
 class AudioTranscriber:
     def __init__(self, mic_source, speaker_source, model,
-                 context_depth=3, pause_threshold=3.0, min_user_speech=1.5,
+                 context_depth=3,
                  logger=None, language="ru"):
         self.context_start = 0
         self.context_end = context_depth - 1
-        self.pause_threshold = pause_threshold
-        self.min_user_speech = min_user_speech
         self.logger = logger
         self.language = language
         self._gpt_callback = None
@@ -184,15 +182,4 @@ class AudioTranscriber:
     def _check_gpt_trigger(self):
         if not self._gpt_callback:
             return
-        if not self.audio_sources['Speaker']['last_spoken']:
-            return
-        now = datetime.utcnow()
-        pause = (now - self.audio_sources['Speaker']['last_spoken']).total_seconds()
-        if pause >= self.pause_threshold:
-            self._gpt_callback(self.get_current_prompt())
-            return
-        user_info = self.audio_sources['You']
-        if user_info['last_spoken'] and (now - user_info['last_spoken']).total_seconds() < 3:
-            dur = len(user_info['last_sample']) / (user_info['sample_rate'] * user_info['sample_width'])
-            if dur >= self.min_user_speech:
-                self._gpt_callback(self.get_current_prompt())
+        self._gpt_callback(self.get_current_prompt())
