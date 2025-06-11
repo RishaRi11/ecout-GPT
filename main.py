@@ -4,6 +4,7 @@ load_dotenv()
 import threading
 import queue
 import time
+import asyncio
 import subprocess
 import os
 from datetime import datetime

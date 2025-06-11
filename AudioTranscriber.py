@@ -4,6 +4,7 @@ import threading
 import tempfile
 import custom_speech_recognition as sr
 import io
+import asyncio
 from datetime import timedelta, datetime, timezone
 import pyaudiowpatch as pyaudio
 from heapq import merge
@@ -64,6 +65,9 @@ class AudioTranscriber:
         return [t[0].strip() for t in spk[start:end + 1]]
 
     def transcribe_audio_queue(self, speaker_queue, mic_queue):
+        asyncio.run(self.transcribe_audio_queue_async(speaker_queue, mic_queue))
+
+    async def transcribe_audio_queue_async(self, speaker_queue, mic_queue):
         import queue
 
         while True:
@@ -93,7 +97,7 @@ class AudioTranscriber:
                     fd, path = tempfile.mkstemp(suffix=".wav")
                     os.close(fd)
                     source_info["process_data_func"](source_info["last_sample"], path)
-                    text = self.audio_model.get_transcription(path, self.get_language())
+                    text = await self.audio_model.get_transcription(path, self.get_language())
                     if text != '' and text.lower() != 'you':
                         latest_time = max(time for _, time in mic_data)
                         pending_transcriptions.append(("You", text, latest_time))
@@ -108,7 +112,7 @@ class AudioTranscriber:
                     fd, path = tempfile.mkstemp(suffix=".wav")
                     os.close(fd)
                     source_info["process_data_func"](source_info["last_sample"], path)
-                    text = self.audio_model.get_transcription(path, self.get_language())
+                    text = await self.audio_model.get_transcription(path, self.get_language())
                     if text != '' and text.lower() != 'you':
                         latest_time = max(time for _, time in speaker_data)
                         pending_transcriptions.append(("Speaker", text, latest_time))
@@ -125,7 +129,7 @@ class AudioTranscriber:
 
                 self.transcript_changed_event.set()
 
-            threading.Event().wait(0.1)
+            await asyncio.sleep(0.1)
 
     def update_last_sample_and_phrase_status(self, who_spoke, data, time_spoken):
         source_info = self.audio_sources[who_spoke]
