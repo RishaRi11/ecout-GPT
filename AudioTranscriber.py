@@ -30,6 +30,7 @@ class AudioTranscriber:
                 "sample_width": mic_source.SAMPLE_WIDTH,
                 "channels": mic_source.channels,
                 "last_sample": bytes(),
+                "phrase_buffer": bytearray(),
                 "last_spoken": None,
                 "new_phrase": True,
                 "phrase_id": 0,
@@ -41,6 +42,7 @@ class AudioTranscriber:
                 "sample_width": speaker_source.SAMPLE_WIDTH,
                 "channels": speaker_source.channels,
                 "last_sample": bytes(),
+                "phrase_buffer": bytearray(),
                 "last_spoken": None,
                 "new_phrase": True,
                 "phrase_id": 0,
@@ -74,86 +76,103 @@ class AudioTranscriber:
     async def transcribe_audio_queue_async(self, speaker_queue, mic_queue):
         import queue
 
-        while True:
-            pending_transcriptions = []
+        pending_tasks = set()
 
-            mic_data = []
+        while True:
+            now = datetime.utcnow()
+
             while True:
                 try:
                     data, time_spoken = mic_queue.get_nowait()
-                    self.update_last_sample_and_phrase_status("You", data, time_spoken)
-                    mic_data.append((data, time_spoken))
+                    completed = self.update_last_sample_and_phrase_status("You", data, time_spoken)
+                    if completed:
+                        buf, pid, t_spoken = completed
+                        pending_tasks.add(asyncio.create_task(
+                            self._process_phrase("You", buf, t_spoken, pid)
+                        ))
                 except queue.Empty:
                     break
 
-            speaker_data = []
             while True:
                 try:
                     data, time_spoken = speaker_queue.get_nowait()
-                    self.update_last_sample_and_phrase_status("Speaker", data, time_spoken)
-                    speaker_data.append((data, time_spoken))
+                    completed = self.update_last_sample_and_phrase_status("Speaker", data, time_spoken)
+                    if completed:
+                        buf, pid, t_spoken = completed
+                        pending_tasks.add(asyncio.create_task(
+                            self._process_phrase("Speaker", buf, t_spoken, pid)
+                        ))
                 except queue.Empty:
                     break
 
-            if mic_data:
-                source_info = self.audio_sources["You"]
+            for who in ("You", "Speaker"):
+                src = self.audio_sources[who]
+                if (
+                    src["phrase_buffer"]
+                    and src["last_spoken"] is not None
+                    and now - src["last_spoken"] > timedelta(seconds=PHRASE_TIMEOUT)
+                ):
+                    buf = bytes(src["phrase_buffer"])
+                    pid = src["phrase_id"]
+                    t_spoken = src["last_spoken"]
+                    src["phrase_buffer"] = bytearray()
+                    src["phrase_id"] += 1
+                    src["new_phrase"] = True
+                    pending_tasks.add(asyncio.create_task(
+                        self._process_phrase(who, buf, t_spoken, pid)
+                    ))
+
+            done = {t for t in pending_tasks if t.done()}
+            for t in done:
+                pending_tasks.remove(t)
                 try:
-                    fd, path = tempfile.mkstemp(suffix=".wav")
-                    os.close(fd)
-                    source_info["process_data_func"](source_info["last_sample"], path)
-                    text = await self.audio_model.get_transcription(path, self.get_language())
-                    if text != '' and text.lower() != 'you':
-                        latest_time = max(time for _, time in mic_data)
-                        pending_transcriptions.append(
-                            ("You", text, latest_time, source_info["phrase_id"])
-                        )
+                    await t
                 except Exception as e:
-                    print(f"Transcription error for You: {e}")
-                finally:
-                    os.unlink(path)
-
-            if speaker_data:
-                source_info = self.audio_sources["Speaker"]
-                try:
-                    fd, path = tempfile.mkstemp(suffix=".wav")
-                    os.close(fd)
-                    source_info["process_data_func"](source_info["last_sample"], path)
-                    text = await self.audio_model.get_transcription(path, self.get_language())
-                    if text != '' and text.lower() != 'you':
-                        latest_time = max(time for _, time in speaker_data)
-                        pending_transcriptions.append(
-                            ("Speaker", text, latest_time, source_info["phrase_id"])
-                        )
-                except Exception as e:
-                    print(f"Transcription error for Speaker: {e}")
-                finally:
-                    os.unlink(path)
-
-            if pending_transcriptions:
-                pending_transcriptions.sort(key=lambda x: x[2])
-                for who_spoke, text, time_spoken, phrase_id in pending_transcriptions:
-                    self.update_transcript(who_spoke, text, time_spoken, phrase_id)
-                    self._check_gpt_trigger()
-
-                self.transcript_changed_event.set()
+                    print(f"Transcription task error: {e}")
 
             await asyncio.sleep(0.1)
 
     def update_last_sample_and_phrase_status(self, who_spoke, data, time_spoken):
         source_info = self.audio_sources[who_spoke]
+        completed = None
+
         if (
-            source_info["last_spoken"] is None
-            or time_spoken - source_info["last_spoken"] > timedelta(seconds=PHRASE_TIMEOUT)
+            source_info["last_spoken"] is not None
+            and time_spoken - source_info["last_spoken"] > timedelta(seconds=PHRASE_TIMEOUT)
+            and source_info["phrase_buffer"]
         ):
-            source_info["last_sample"] = bytes()
-            source_info["new_phrase"] = True
+            completed = (
+                bytes(source_info["phrase_buffer"]),
+                source_info["phrase_id"],
+                source_info["last_spoken"],
+            )
+            source_info["phrase_buffer"] = bytearray()
             source_info["phrase_id"] += 1
-            source_info["phrase_start"] = time_spoken
+            source_info["new_phrase"] = True
         else:
             source_info["new_phrase"] = False
 
-        source_info["last_sample"] += data
-        source_info["last_spoken"] = time_spoken 
+        source_info["phrase_buffer"] += data
+        source_info["last_sample"] = bytes(source_info["phrase_buffer"])
+        source_info["last_spoken"] = time_spoken
+
+        return completed
+
+    async def _process_phrase(self, who_spoke, data, time_spoken, phrase_id):
+        source_info = self.audio_sources[who_spoke]
+        try:
+            fd, path = tempfile.mkstemp(suffix=".wav")
+            os.close(fd)
+            source_info["process_data_func"](data, path)
+            text = await self.audio_model.get_transcription(path, self.get_language())
+            if text != '' and text.lower() != 'you':
+                self.update_transcript(who_spoke, text, time_spoken, phrase_id)
+                self._check_gpt_trigger()
+                self.transcript_changed_event.set()
+        except Exception as e:
+            print(f"Transcription error for {who_spoke}: {e}")
+        finally:
+            os.unlink(path)
 
     def process_mic_data(self, data, temp_file_name):
         audio_data = sr.AudioData(data, self.audio_sources["You"]["sample_rate"], self.audio_sources["You"]["sample_width"])
@@ -195,6 +214,8 @@ class AudioTranscriber:
 
         self.audio_sources["You"]["last_sample"] = bytes()
         self.audio_sources["Speaker"]["last_sample"] = bytes()
+        self.audio_sources["You"]["phrase_buffer"] = bytearray()
+        self.audio_sources["Speaker"]["phrase_buffer"] = bytearray()
 
         self.audio_sources["You"]["new_phrase"] = True
         self.audio_sources["Speaker"]["new_phrase"] = True
