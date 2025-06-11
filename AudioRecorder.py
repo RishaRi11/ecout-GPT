@@ -2,7 +2,8 @@ import custom_speech_recognition as sr
 import pyaudiowpatch as pyaudio
 from datetime import datetime
 
-RECORD_TIMEOUT = 3
+# Reduce the chunk length to lower latency during recording.
+RECORD_TIMEOUT = 0.8
 ENERGY_THRESHOLD = 1000
 DYNAMIC_ENERGY_THRESHOLD = False
 

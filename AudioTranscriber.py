@@ -9,7 +9,8 @@ from datetime import timedelta, datetime, timezone
 import pyaudiowpatch as pyaudio
 from heapq import merge
 
-PHRASE_TIMEOUT = 3.05
+# Slightly longer than RECORD_TIMEOUT for correct phrase segmentation.
+PHRASE_TIMEOUT = 0.85
 MAX_PHRASES = 10
 
 class AudioTranscriber:
