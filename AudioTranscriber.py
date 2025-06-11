@@ -32,6 +32,7 @@ class AudioTranscriber:
                 "last_sample": bytes(),
                 "last_spoken": None,
                 "new_phrase": True,
+                "phrase_id": 0,
                 "process_data_func": self.process_mic_data
             },
             "Speaker": {
@@ -41,6 +42,7 @@ class AudioTranscriber:
                 "last_sample": bytes(),
                 "last_spoken": None,
                 "new_phrase": True,
+                "phrase_id": 0,
                 "process_data_func": self.process_speaker_data
             }
         }
@@ -136,6 +138,7 @@ class AudioTranscriber:
         if source_info["last_spoken"] and time_spoken - source_info["last_spoken"] > timedelta(seconds=PHRASE_TIMEOUT):
             source_info["last_sample"] = bytes()
             source_info["new_phrase"] = True
+            source_info["phrase_id"] += 1
         else:
             source_info["new_phrase"] = False
 
@@ -160,18 +163,26 @@ class AudioTranscriber:
         source_info = self.audio_sources[who_spoke]
         transcript = self.transcript_data[who_spoke]
 
+        phrase_id = source_info.get("phrase_id", 0)
+
         if source_info["new_phrase"] or len(transcript) == 0:
-            if len(transcript) > MAX_PHRASES:
+            if len(transcript) >= MAX_PHRASES:
                 transcript.pop(-1)
-            transcript.insert(0, (f"{who_spoke}: [{text}]\n\n", time_spoken, who_spoke))
+            transcript.insert(0, (f"{who_spoke}: [{text}]\n\n", time_spoken, who_spoke, phrase_id))
         else:
-            transcript[0] = (f"{who_spoke}: [{text}]\n\n", time_spoken, who_spoke)
+            if transcript and transcript[0][3] == phrase_id:
+                start_time = transcript[0][1]
+                transcript[0] = (f"{who_spoke}: [{text}]\n\n", start_time, who_spoke, phrase_id)
+            else:
+                if len(transcript) >= MAX_PHRASES:
+                    transcript.pop(-1)
+                transcript.insert(0, (f"{who_spoke}: [{text}]\n\n", time_spoken, who_spoke, phrase_id))
 
     def get_transcript(self):
         combined = list(merge(
             self.transcript_data["You"], self.transcript_data["Speaker"],
             key=lambda x: x[1], reverse=True))
-        return combined[:MAX_PHRASES]   # список кортежей (text, time, role)
+        return combined[:MAX_PHRASES]   # список кортежей (text, time, role, id)
 
     def clear_transcript_data(self):
         self.transcript_data["You"].clear()
@@ -182,6 +193,8 @@ class AudioTranscriber:
 
         self.audio_sources["You"]["new_phrase"] = True
         self.audio_sources["Speaker"]["new_phrase"] = True
+        self.audio_sources["You"]["phrase_id"] = 0
+        self.audio_sources["Speaker"]["phrase_id"] = 0
 
     def _check_gpt_trigger(self):
         if not self._gpt_callback:
