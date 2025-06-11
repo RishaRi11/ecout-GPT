@@ -3,3 +3,8 @@ __pycache__/
 keys.py
 .venv/
 .env
+.cursor/rules
+.idea
+.idea/misc.xml
+.cursorignore
+ecoute-main.code-workspace

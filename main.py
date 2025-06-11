@@ -14,6 +14,7 @@ import tkinter as tk
 
 import AudioRecorder
 from AudioTranscriber import AudioTranscriber
+from vertical_range_slider import VerticalRangeSlider
 from gpt_manager import GPTManager
 from log_manager import LogManager
 import TranscriberModels
@@ -22,8 +23,6 @@ from config_manager import load_config, save_config
 
 # ---------- CONFIG DEFAULTS ----------
 CONTEXT_DEPTH_DEFAULT = 3
-PAUSE_THRESHOLD_DEFAULT = 3.0
-MIN_USER_SPEECH_DEFAULT = 1.5
 BTN_ICON_FONT = ("Arial", 18)
 
 load_dotenv()  # подгружаем OPENAI_API_KEY из .env
@@ -36,7 +35,7 @@ FONT_CFG = {
 # ---------- UI helpers ----------
 
 # В файле main.py, примерно строка 34
-def write_transcript(tb: ctk.CTkTextbox, items, depth: int):
+def write_transcript(tb: ctk.CTkTextbox, items, start: int, end: int):
     # для совместимости со старыми/новыми версиями customtkinter
     inner = getattr(tb, "textbox", None) or tb._textbox        
 
@@ -59,14 +58,14 @@ def write_transcript(tb: ctk.CTkTextbox, items, depth: int):
         # Фон для строк, попадающих в контекст
     inner.tag_configure("ctx_tag", background="#444444")
 
-    ctx_counter = 0
+    spk_index = 0
     for text, _, role in items:
         tag = "speaker_tag" if role == "Speaker" else "user_tag"
         extra = ()
-        # первые N реплик Speaker идут в контекст
-        if role == "Speaker" and ctx_counter < depth:
-            extra = ("ctx_tag",)
-            ctx_counter += 1
+        if role == "Speaker":
+            if start <= spk_index <= end:
+                extra = ("ctx_tag",)
+            spk_index += 1
         inner.insert("end", text, (tag, *extra))
 
     inner.configure(state="disabled")
@@ -86,7 +85,9 @@ def create_ui(root, transcriber, gpt_mgr, mic_rec, spk_rec, config):
 
     root.title("Ecoute + GPT")
     root.geometry("1200x650")
-    root.grid_columnconfigure((0, 1), weight=1)
+    root.grid_columnconfigure(0, weight=1)
+    root.grid_columnconfigure(1, weight=0)
+    root.grid_columnconfigure(2, weight=1)
     root.grid_rowconfigure(0, weight=1)
 
     # --- Left: transcript ---
@@ -95,7 +96,18 @@ def create_ui(root, transcriber, gpt_mgr, mic_rec, spk_rec, config):
 
     # --- Right: GPT answer ---
     gpt_tb = ctk.CTkTextbox(root, font=("Arial", 16, "italic"), wrap="word", text_color="#C4FFEE")
-    gpt_tb.grid(row=0, column=1, sticky="nsew", padx=(5, 10), pady=10)
+    gpt_tb.grid(row=0, column=2, sticky="nsew", padx=(5, 10), pady=10)
+
+    # --- Vertical range slider for context selection ---
+    range_slider = VerticalRangeSlider(
+        root,
+        from_=0,
+        to=1,
+        number_of_steps=1,
+        command=lambda v: update_context_range(int(v[0]), int(v[1]))
+    )
+    range_slider.grid(row=0, column=1, sticky="ns", pady=10)
+    range_slider.set(transcriber.context_start, transcriber.context_end)
 
     # --- делаем оба textbox-а доступными для выделения/копирования ---
     for tb in (transcript_tb, gpt_tb):
@@ -110,11 +122,11 @@ def create_ui(root, transcriber, gpt_mgr, mic_rec, spk_rec, config):
             )
     # --- Bottom panel ---
     bottom = ctk.CTkFrame(root)
-    bottom.grid(row=1, column=0, columnspan=2, sticky="ew", padx=10, pady=(0, 10))
+    bottom.grid(row=1, column=0, columnspan=3, sticky="ew", padx=10, pady=(0, 10))
     bottom.grid_columnconfigure(0, weight=1)    # левые кнопки тянутся влево
     bottom.grid_columnconfigure(1, weight=1)    # правые тянутся вправо
 
-    # ----- ЛЕВАЯ группа (Mute + Settings) ------------------
+    # ----- ЛЕВАЯ группа (Mute + Language) ------------------
     left_box = ctk.CTkFrame(bottom, fg_color="transparent")
     left_box.grid(row=0, column=0, sticky="w")
 
@@ -156,10 +168,6 @@ def create_ui(root, transcriber, gpt_mgr, mic_rec, spk_rec, config):
                   command=_toggle_spk
                  ).pack(side="left", padx=(4,0))
 
-    ctk.CTkButton(left_box, text="⚙", width=30, font=("Arial", 16),
-                  command=lambda: open_settings(root, transcriber)
-                 ).pack(side="left", padx=10)
-    
     ctk.CTkButton(left_box, text="🌐", width=30, font=("Arial", 18),
                   command=lambda: open_language_settings(root, transcriber, config)
                   ).pack(side="left", padx=4)
@@ -188,31 +196,10 @@ def create_ui(root, transcriber, gpt_mgr, mic_rec, spk_rec, config):
     # ---------------------------------------------
     # Frame для ползунка и окна превью контекста
     context_frame = ctk.CTkFrame(bottom, fg_color="transparent")
-    # размещаем в строке 1 (ниже left_box и right_box), растягиваем на оба столбца
-    context_frame.grid(row=1, column=0, columnspan=2, sticky="ew", padx=10, pady=(5, 10))
-    context_frame.grid_columnconfigure(0, weight=0)   # метка «Контекст:»
-    context_frame.grid_columnconfigure(1, weight=1)   # сам слайдер растягивается
-    context_frame.grid_columnconfigure(2, weight=0)   # числовая метка справа
+    context_frame.grid(row=1, column=0, columnspan=3, sticky="ew", padx=10, pady=(5, 10))
+    context_frame.grid_columnconfigure(0, weight=1)
 
-    # Метка "Контекст:"
-    ctk.CTkLabel(context_frame, text="Контекст:").grid(row=0, column=0, padx=(0, 5), pady=(0, 3), sticky="w")
-
-    # Ползунок для выбора глубины контекста (context_depth)
-    # от 1 до, например, 10. Шаг = 1.
-    context_slider = ctk.CTkSlider(
-        context_frame,
-        from_=1, to=10,
-        width=400,                   # ← короче: ~½ левого окна
-        command=lambda val: update_context(int(val)),
-        number_of_steps=9
-    )
-    # справа от слайдера добавляем метку-значение
-    value_lbl = ctk.CTkLabel(context_frame, text=str(transcriber.context_depth))
-    value_lbl.grid(row=0, column=2, padx=(0, 10), sticky="w")
-
-    # задаём текущее значение равным transcriber.context_depth
-    context_slider.set(transcriber.context_depth)
-    context_slider.grid(row=0, column=1, sticky="ew", padx=(0, 5), pady=(0, 3))
+    ctk.CTkLabel(context_frame, text="Контекст:").grid(row=0, column=0, sticky="w", padx=(0,5), pady=(0,3))
 
     # Окно превью того, что будет отправляться в GPT
     prompt_preview = ctk.CTkTextbox(
@@ -226,30 +213,53 @@ def create_ui(root, transcriber, gpt_mgr, mic_rec, spk_rec, config):
     prompt_preview.configure(state="disabled")
 
     # Функция-обработчик изменения ползунка
-    def update_context(depth: int):
-        # Устанавливаем новое значение в transcriber
-        transcriber.context_depth = depth
-        # Формируем строку-превью из get_current_prompt()
-        current_list = transcriber.get_current_prompt()  # возвращает список строк
-        
-        value_lbl.configure(text=str(depth))
+    def update_context_range(start: int, end: int):
+        if end < start:
+            start, end = end, start
+        spk_total = len(transcriber.transcript_data["Speaker"])
+        max_val = max(spk_total - 1, 0)
+        start = max(0, min(start, max_val))
+        end = max(0, min(end, max_val))
+        if end < start:
+            end = start
+        transcriber.context_start = start
+        transcriber.context_end = end
+
+
+        current_list = transcriber.get_current_prompt()
         preview_text = "".join(current_list)
 
-        # Обновляем prompt_preview
+        write_transcript(transcript_tb, transcriber.get_transcript(), start, end)
+
         prompt_preview.configure(state="normal")
         prompt_preview.delete("0.0", "end")
         prompt_preview.insert("0.0", preview_text)
         prompt_preview.configure(state="disabled")
 
+    def update_slider_limits():
+        spk_total = len(transcriber.transcript_data["Speaker"])
+        max_val = max(spk_total - 1, 0)
+        slider_max = max(1, max_val)
+        if hasattr(range_slider, "configure"):
+            range_slider.configure(to=slider_max, number_of_steps=slider_max)
+        if transcriber.context_start > max_val:
+            transcriber.context_start = max_val
+        if transcriber.context_end > max_val:
+            transcriber.context_end = max_val
+        if transcriber.context_end < transcriber.context_start:
+            transcriber.context_start = transcriber.context_end
+        if hasattr(range_slider, "set"):
+            range_slider.set(transcriber.context_start, transcriber.context_end)
+
     # Инициализируем превью при старте
-    update_context(transcriber.context_depth)
+    update_context_range(transcriber.context_start, transcriber.context_end)
 
 
     def _poll_events():
         # новый текст от транскрипции
         if transcriber.transcript_changed_event.is_set():
-            write_transcript(transcript_tb, transcriber.get_transcript(), transcriber.context_depth)
-            update_context(transcriber.context_depth)   # пересчёт выделения/превью
+            update_slider_limits()
+            update_context_range(transcriber.context_start, transcriber.context_end)
             transcriber.transcript_changed_event.clear()
 
         # новый ответ GPT
@@ -261,93 +271,6 @@ def create_ui(root, transcriber, gpt_mgr, mic_rec, spk_rec, config):
 
     _poll_events()   # -> первый запуск
  
-
-# ---------- Settings window ----------
-
-def open_settings(parent, transcriber):
-    """Открывает единственное модальное окно настроек."""
-
-    # если уже открыто
-    if getattr(parent, "_settings_win", None) and parent._settings_win.winfo_exists():
-        parent._settings_win.focus_force()
-        return
-
-    win = ctk.CTkToplevel(parent)
-    win.title("Настройки")
-    win.resizable(False, False)
-    win.transient(parent)
-    win.grab_set()
-    parent._settings_win = win
-
-    # helper для каждой настройки (slider + entry)
-    def slider_block(row, label, from_, to_, step, initial):
-        """
-        Создаёт блок: Label + Slider + Entry.  Синхронизация:
-        • слайдер ↔︎ DoubleVar `var`
-        • Entry ↔︎ StringVar `str_var`
-        При вводе в Entry:   1) запятая → точка
-                             2) допускаются только 0-9 и «.»
-                             3) пустая строка разрешена (во время редактирования)
-        Корректное число → обновляем `var`  → двигается слайдер.
-        """
-        # ---------- визуальная часть ----------
-        ctk.CTkLabel(win, text=label).grid(row=row, column=0, columnspan=3,
-                                           pady=(10 if row == 0 else 15, 0))
-
-        var = ctk.DoubleVar(value=float(initial))          # хранит валидный float
-        slider = ctk.CTkSlider(win, from_=from_, to=to_,
-                               number_of_steps=int((to_ - from_) / step),
-                               variable=var)
-        slider.grid(row=row + 1, column=0, columnspan=2, padx=20, sticky="ew")
-
-        str_var = ctk.StringVar(value=str(initial))        # строка из Entry
-        entry = ctk.CTkEntry(win, width=60, textvariable=str_var)
-        entry.grid(row=row + 1, column=2, padx=(0, 15))
-
-        # ---------- синхронизация ----------
-        # a) движение слайдера → обновляем Entry
-        def _slider_changed(val):
-            fval = round(float(val), 2)
-            var.set(fval)               # держим var «чистым»
-            str_var.set(str(fval))      # показывает пользователю
-        slider.configure(command=_slider_changed)
-
-        # b) печать в Entry → проверка и обновление var/слайдера
-        last_ok = {"txt": str(initial)}   # сохраняем последнее валидное
-        def _entry_trace(*_):
-            raw = str_var.get().replace(",", ".")          # запятая → точка
-            if raw == "":                                  # пусто во время ввода
-                return
-            # только допустимые символы (цифры и одна точка)
-            if not re.fullmatch(r"\d*\.?\d*", raw):
-                str_var.set(last_ok["txt"])
-                return
-            try:
-                f = float(raw)
-            except ValueError:
-                str_var.set(last_ok["txt"])
-                return
-            # в диапазоне?
-            if from_ <= f <= to_:
-                last_ok["txt"] = raw
-                var.set(f)              # обновит слайдер автоматически
-            else:
-                str_var.set(last_ok["txt"])
-        str_var.trace_add("write", _entry_trace)
-
-        return var
-
-    # ctx_var = slider_block(0, "Глубина контекста (фразы)", 1, 10, 1, transcriber.context_depth)
-    pause_var = slider_block(2, "Пауза собеседника (сек)", 0.5, 10, 0.5, transcriber.pause_threshold)
-    dur_var = slider_block(4, "Мин. длительность вашей речи (сек)", 0.5, 5, 0.5, transcriber.min_user_speech)
-
-    def save():
-        # transcriber.context_depth = int(ctx_var.get())
-        transcriber.pause_threshold = float(pause_var.get())
-        transcriber.min_user_speech = float(dur_var.get())
-        win.destroy()
-
-    ctk.CTkButton(win, text="Сохранить", command=save).grid(row=6, column=0, columnspan=3, pady=20)
 
 def open_language_settings(parent, transcriber, config):
     if getattr(parent, "_lang_win", None) and parent._lang_win.winfo_exists():
@@ -422,8 +345,6 @@ def main():
         spk_rec.source,
         model,
         context_depth=CONTEXT_DEPTH_DEFAULT,
-        pause_threshold=PAUSE_THRESHOLD_DEFAULT,
-        min_user_speech=MIN_USER_SPEECH_DEFAULT,
         logger=log_mgr,
         language=config.get("language", "ru"),
     )
