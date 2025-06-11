@@ -23,8 +23,6 @@ from config_manager import load_config, save_config
 
 # ---------- CONFIG DEFAULTS ----------
 CONTEXT_DEPTH_DEFAULT = 3
-PAUSE_THRESHOLD_DEFAULT = 3.0
-MIN_USER_SPEECH_DEFAULT = 1.5
 BTN_ICON_FONT = ("Arial", 18)
 
 load_dotenv()  # подгружаем OPENAI_API_KEY из .env
@@ -128,7 +126,7 @@ def create_ui(root, transcriber, gpt_mgr, mic_rec, spk_rec, config):
     bottom.grid_columnconfigure(0, weight=1)    # левые кнопки тянутся влево
     bottom.grid_columnconfigure(1, weight=1)    # правые тянутся вправо
 
-    # ----- ЛЕВАЯ группа (Mute + Settings) ------------------
+    # ----- ЛЕВАЯ группа (Mute + Language) ------------------
     left_box = ctk.CTkFrame(bottom, fg_color="transparent")
     left_box.grid(row=0, column=0, sticky="w")
 
@@ -170,10 +168,6 @@ def create_ui(root, transcriber, gpt_mgr, mic_rec, spk_rec, config):
                   command=_toggle_spk
                  ).pack(side="left", padx=(4,0))
 
-    ctk.CTkButton(left_box, text="⚙", width=30, font=("Arial", 16),
-                  command=lambda: open_settings(root, transcriber)
-                 ).pack(side="left", padx=10)
-    
     ctk.CTkButton(left_box, text="🌐", width=30, font=("Arial", 18),
                   command=lambda: open_language_settings(root, transcriber, config)
                   ).pack(side="left", padx=4)
@@ -278,93 +272,6 @@ def create_ui(root, transcriber, gpt_mgr, mic_rec, spk_rec, config):
     _poll_events()   # -> первый запуск
  
 
-# ---------- Settings window ----------
-
-def open_settings(parent, transcriber):
-    """Открывает единственное модальное окно настроек."""
-
-    # если уже открыто
-    if getattr(parent, "_settings_win", None) and parent._settings_win.winfo_exists():
-        parent._settings_win.focus_force()
-        return
-
-    win = ctk.CTkToplevel(parent)
-    win.title("Настройки")
-    win.resizable(False, False)
-    win.transient(parent)
-    win.grab_set()
-    parent._settings_win = win
-
-    # helper для каждой настройки (slider + entry)
-    def slider_block(row, label, from_, to_, step, initial):
-        """
-        Создаёт блок: Label + Slider + Entry.  Синхронизация:
-        • слайдер ↔︎ DoubleVar `var`
-        • Entry ↔︎ StringVar `str_var`
-        При вводе в Entry:   1) запятая → точка
-                             2) допускаются только 0-9 и «.»
-                             3) пустая строка разрешена (во время редактирования)
-        Корректное число → обновляем `var`  → двигается слайдер.
-        """
-        # ---------- визуальная часть ----------
-        ctk.CTkLabel(win, text=label).grid(row=row, column=0, columnspan=3,
-                                           pady=(10 if row == 0 else 15, 0))
-
-        var = ctk.DoubleVar(value=float(initial))          # хранит валидный float
-        slider = ctk.CTkSlider(win, from_=from_, to=to_,
-                               number_of_steps=int((to_ - from_) / step),
-                               variable=var)
-        slider.grid(row=row + 1, column=0, columnspan=2, padx=20, sticky="ew")
-
-        str_var = ctk.StringVar(value=str(initial))        # строка из Entry
-        entry = ctk.CTkEntry(win, width=60, textvariable=str_var)
-        entry.grid(row=row + 1, column=2, padx=(0, 15))
-
-        # ---------- синхронизация ----------
-        # a) движение слайдера → обновляем Entry
-        def _slider_changed(val):
-            fval = round(float(val), 2)
-            var.set(fval)               # держим var «чистым»
-            str_var.set(str(fval))      # показывает пользователю
-        slider.configure(command=_slider_changed)
-
-        # b) печать в Entry → проверка и обновление var/слайдера
-        last_ok = {"txt": str(initial)}   # сохраняем последнее валидное
-        def _entry_trace(*_):
-            raw = str_var.get().replace(",", ".")          # запятая → точка
-            if raw == "":                                  # пусто во время ввода
-                return
-            # только допустимые символы (цифры и одна точка)
-            if not re.fullmatch(r"\d*\.?\d*", raw):
-                str_var.set(last_ok["txt"])
-                return
-            try:
-                f = float(raw)
-            except ValueError:
-                str_var.set(last_ok["txt"])
-                return
-            # в диапазоне?
-            if from_ <= f <= to_:
-                last_ok["txt"] = raw
-                var.set(f)              # обновит слайдер автоматически
-            else:
-                str_var.set(last_ok["txt"])
-        str_var.trace_add("write", _entry_trace)
-
-        return var
-
-    # ctx_var = slider_block(0, "Глубина контекста (фразы)", 1, 10, 1, transcriber.context_depth)
-    pause_var = slider_block(2, "Пауза собеседника (сек)", 0.5, 10, 0.5, transcriber.pause_threshold)
-    dur_var = slider_block(4, "Мин. длительность вашей речи (сек)", 0.5, 5, 0.5, transcriber.min_user_speech)
-
-    def save():
-        # transcriber.context_depth = int(ctx_var.get())
-        transcriber.pause_threshold = float(pause_var.get())
-        transcriber.min_user_speech = float(dur_var.get())
-        win.destroy()
-
-    ctk.CTkButton(win, text="Сохранить", command=save).grid(row=6, column=0, columnspan=3, pady=20)
-
 def open_language_settings(parent, transcriber, config):
     if getattr(parent, "_lang_win", None) and parent._lang_win.winfo_exists():
         parent._lang_win.focus_force()
@@ -438,8 +345,6 @@ def main():
         spk_rec.source,
         model,
         context_depth=CONTEXT_DEPTH_DEFAULT,
-        pause_threshold=PAUSE_THRESHOLD_DEFAULT,
-        min_user_speech=MIN_USER_SPEECH_DEFAULT,
         logger=log_mgr,
         language=config.get("language", "ru"),
     )
