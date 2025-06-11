@@ -60,7 +60,8 @@ def write_transcript(tb: ctk.CTkTextbox, items, start: int, end: int):
     inner.tag_configure("ctx_tag", background="#444444")
 
     spk_index = 0
-    for text, _, role in items:
+    for item in items:
+        text, _, role = item[:3]
         tag = "speaker_tag" if role == "Speaker" else "user_tag"
         extra = ()
         if role == "Speaker":
