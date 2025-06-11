@@ -32,6 +32,8 @@ class AudioTranscriber:
                 "last_sample": bytes(),
                 "last_spoken": None,
                 "new_phrase": True,
+                "phrase_id": 0,
+                "phrase_start": None,
                 "process_data_func": self.process_mic_data
             },
             "Speaker": {
@@ -41,6 +43,8 @@ class AudioTranscriber:
                 "last_sample": bytes(),
                 "last_spoken": None,
                 "new_phrase": True,
+                "phrase_id": 0,
+                "phrase_start": None,
                 "process_data_func": self.process_speaker_data
             }
         }
@@ -100,7 +104,9 @@ class AudioTranscriber:
                     text = await self.audio_model.get_transcription(path, self.get_language())
                     if text != '' and text.lower() != 'you':
                         latest_time = max(time for _, time in mic_data)
-                        pending_transcriptions.append(("You", text, latest_time))
+                        pending_transcriptions.append(
+                            ("You", text, latest_time, source_info["phrase_id"])
+                        )
                 except Exception as e:
                     print(f"Transcription error for You: {e}")
                 finally:
@@ -115,7 +121,9 @@ class AudioTranscriber:
                     text = await self.audio_model.get_transcription(path, self.get_language())
                     if text != '' and text.lower() != 'you':
                         latest_time = max(time for _, time in speaker_data)
-                        pending_transcriptions.append(("Speaker", text, latest_time))
+                        pending_transcriptions.append(
+                            ("Speaker", text, latest_time, source_info["phrase_id"])
+                        )
                 except Exception as e:
                     print(f"Transcription error for Speaker: {e}")
                 finally:
@@ -123,8 +131,8 @@ class AudioTranscriber:
 
             if pending_transcriptions:
                 pending_transcriptions.sort(key=lambda x: x[2])
-                for who_spoke, text, time_spoken in pending_transcriptions:
-                    self.update_transcript(who_spoke, text, time_spoken)
+                for who_spoke, text, time_spoken, phrase_id in pending_transcriptions:
+                    self.update_transcript(who_spoke, text, time_spoken, phrase_id)
                     self._check_gpt_trigger()
 
                 self.transcript_changed_event.set()
@@ -133,9 +141,14 @@ class AudioTranscriber:
 
     def update_last_sample_and_phrase_status(self, who_spoke, data, time_spoken):
         source_info = self.audio_sources[who_spoke]
-        if source_info["last_spoken"] and time_spoken - source_info["last_spoken"] > timedelta(seconds=PHRASE_TIMEOUT):
+        if (
+            source_info["last_spoken"] is None
+            or time_spoken - source_info["last_spoken"] > timedelta(seconds=PHRASE_TIMEOUT)
+        ):
             source_info["last_sample"] = bytes()
             source_info["new_phrase"] = True
+            source_info["phrase_id"] += 1
+            source_info["phrase_start"] = time_spoken
         else:
             source_info["new_phrase"] = False
 
@@ -156,16 +169,19 @@ class AudioTranscriber:
             wf.setframerate(self.audio_sources["Speaker"]["sample_rate"])
             wf.writeframes(data)
 
-    def update_transcript(self, who_spoke, text, time_spoken):
+    def update_transcript(self, who_spoke, text, time_spoken, phrase_id):
         source_info = self.audio_sources[who_spoke]
         transcript = self.transcript_data[who_spoke]
 
-        if source_info["new_phrase"] or len(transcript) == 0:
-            if len(transcript) > MAX_PHRASES:
-                transcript.pop(-1)
-            transcript.insert(0, (f"{who_spoke}: [{text}]\n\n", time_spoken, who_spoke))
+        # Try to find existing entry for this phrase
+        for idx, entry in enumerate(transcript):
+            if len(entry) >= 4 and entry[3] == phrase_id:
+                transcript[idx] = (f"{who_spoke}: [{text}]\n\n", time_spoken, who_spoke, phrase_id)
+                break
         else:
-            transcript[0] = (f"{who_spoke}: [{text}]\n\n", time_spoken, who_spoke)
+            if len(transcript) >= MAX_PHRASES:
+                transcript.pop(-1)
+            transcript.insert(0, (f"{who_spoke}: [{text}]\n\n", time_spoken, who_spoke, phrase_id))
 
     def get_transcript(self):
         combined = list(merge(
