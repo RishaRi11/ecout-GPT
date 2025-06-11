@@ -4,6 +4,7 @@ load_dotenv()
 import threading
 import queue
 import time
+import asyncio
 import subprocess
 import os
 from datetime import datetime
@@ -351,7 +352,9 @@ def main():
 
     gpt_mgr = GPTManager(transcriber)
 
-    thr = threading.Thread(target=transcriber.transcribe_audio_queue, args=(speaker_q, mic_q))
+    thr = threading.Thread(
+        target=lambda: asyncio.run(transcriber.transcribe_audio_queue_async(speaker_q, mic_q))
+    )
     thr.daemon = True
     thr.start()
 
