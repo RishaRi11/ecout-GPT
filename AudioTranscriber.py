@@ -10,7 +10,8 @@ import pyaudiowpatch as pyaudio
 from heapq import merge
 
 # Slightly longer than RECORD_TIMEOUT for correct phrase segmentation.
-PHRASE_TIMEOUT = 0.85
+# Keep a small margin so phrases merge naturally.
+PHRASE_TIMEOUT = 1.05
 MAX_PHRASES = 10
 
 class AudioTranscriber:

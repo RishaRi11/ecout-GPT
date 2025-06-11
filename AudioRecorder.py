@@ -3,7 +3,9 @@ import pyaudiowpatch as pyaudio
 from datetime import datetime
 
 # Reduce the chunk length to lower latency during recording.
-RECORD_TIMEOUT = 0.8
+# Using one second chunks keeps speech from getting cut off
+# while still maintaining responsiveness.
+RECORD_TIMEOUT = 1.0
 ENERGY_THRESHOLD = 1000
 DYNAMIC_ENERGY_THRESHOLD = False
 
